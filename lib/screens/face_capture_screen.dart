@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tp/providers/auth_provider.dart';
@@ -29,7 +28,6 @@ class FaceCaptureScreen extends StatefulWidget {
 class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
   CameraController? _controller;
   bool _isLoading = false;
-  bool _isCameraInitialized = false;
   bool _hasError = false;
   String? _errorMessage;
   final _logger = Logger('FaceCaptureScreen');
@@ -89,7 +87,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
 
       setState(() {
         _controller = controller;
-        _isCameraInitialized = true;
         _isLoading = false;
       });
     } catch (e) {
@@ -170,13 +167,28 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
 
         if (!mounted) return;
 
-        final success = await context.read<AuthProvider>().signInWithFace(imageFile);
+        final success = await context.read<AuthProvider>().signInWithFace(
+          imageFile,
+          widget.email,
+        );
         await _playSound(success);
 
         if (!mounted) return;
 
         if (success) {
-          Navigator.of(context).pushReplacementNamed('/home');
+          if (!mounted) return;
+          try {
+            await Navigator.of(context).pushReplacementNamed('/home');
+          } catch (e) {
+            _logger.severe('Navigation error', e);
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Erreur de navigation. Veuillez réessayer.'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Échec de la reconnaissance faciale')),
@@ -221,10 +233,19 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
 
           if (success) {
             _logger.info('Registration successful, navigating to home');
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Inscription réussie !')),
-            );
-            Navigator.of(context).pushReplacementNamed('/home');
+            if (!mounted) return;
+            try {
+              await Navigator.of(context).pushReplacementNamed('/home');
+            } catch (e) {
+              _logger.severe('Navigation error', e);
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Erreur de navigation. Veuillez réessayer.'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
           } else {
             _logger.severe('Registration failed without specific error');
             ScaffoldMessenger.of(context).showSnackBar(

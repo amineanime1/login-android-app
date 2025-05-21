@@ -2,9 +2,10 @@ import 'dart:io';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:path/path.dart' as path;
+import 'package:logging/logging.dart';
 
 class FaceRecognitionService {
-  final FaceDetector _faceDetector = FaceDetector(
+  final _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
       enableClassification: true,
       enableLandmarks: true,
@@ -12,6 +13,7 @@ class FaceRecognitionService {
       minFaceSize: 0.15,
     ),
   );
+  final _logger = Logger('FaceRecognitionService');
 
   final SupabaseClient _client = Supabase.instance.client;
   final String _bucketName = 'faces';
@@ -46,38 +48,97 @@ class FaceRecognitionService {
     }
   }
 
-  Future<bool> compareFaces(File currentImage, File storedImage) async {
+  Future<bool> detectFace(File imageFile) async {
     try {
-      // Détecter les visages dans les deux images
-      final currentFaces = await _faceDetector.processImage(
-        InputImage.fromFile(currentImage)
-      );
-      final storedFaces = await _faceDetector.processImage(
-        InputImage.fromFile(storedImage)
-      );
+      final inputImage = InputImage.fromFile(imageFile);
+      final faces = await _faceDetector.processImage(inputImage);
 
-      if (currentFaces.isEmpty || storedFaces.isEmpty) {
+      if (faces.isEmpty) {
+        _logger.warning('No face detected in image');
         return false;
       }
 
-      // Comparaison basique des visages
-      // Pour un projet étudiant, nous utilisons une comparaison simple
-      // basée sur la taille et la position du visage
-      final currentFace = currentFaces.first;
-      final storedFace = storedFaces.first;
+      if (faces.length > 1) {
+        _logger.warning('Multiple faces detected in image');
+        return false;
+      }
 
-      // Comparer la taille relative du visage
-      final sizeDiff = (currentFace.boundingBox.width - storedFace.boundingBox.width).abs() /
-          storedFace.boundingBox.width;
+      final face = faces.first;
+      
+      // Check if face is properly aligned
+      if (face.headEulerAngleY != null && face.headEulerAngleY!.abs() > 20) {
+        _logger.warning('Face is not properly aligned');
+        return false;
+      }
 
-      // Comparer la position relative du visage
-      final positionDiff = (currentFace.boundingBox.top - storedFace.boundingBox.top).abs() /
-          storedFace.boundingBox.height;
+      // Check if eyes are open
+      if (face.leftEyeOpenProbability != null && 
+          face.rightEyeOpenProbability != null) {
+        final leftEyeOpen = face.leftEyeOpenProbability! > 0.5;
+        final rightEyeOpen = face.rightEyeOpenProbability! > 0.5;
+        
+        if (!leftEyeOpen || !rightEyeOpen) {
+          _logger.warning('Eyes are not open');
+          return false;
+        }
+      }
 
-      // Seuil de tolérance (à ajuster selon vos besoins)
-      return sizeDiff < 0.2 && positionDiff < 0.2;
+      return true;
     } catch (e) {
-      print('Error comparing faces: $e');
+      _logger.severe('Error detecting face', e);
+      return false;
+    }
+  }
+
+  Future<bool> compareFaces(File image1, File image2) async {
+    try {
+      final inputImage1 = InputImage.fromFile(image1);
+      final inputImage2 = InputImage.fromFile(image2);
+
+      final faces1 = await _faceDetector.processImage(inputImage1);
+      final faces2 = await _faceDetector.processImage(inputImage2);
+
+      if (faces1.isEmpty || faces2.isEmpty) {
+        _logger.warning('No face detected in one or both images');
+        return false;
+      }
+
+      if (faces1.length > 1 || faces2.length > 1) {
+        _logger.warning('Multiple faces detected in one or both images');
+        return false;
+      }
+
+      final face1 = faces1.first;
+      final face2 = faces2.first;
+
+      // Compare face landmarks
+      final landmarks1 = face1.landmarks;
+      final landmarks2 = face2.landmarks;
+
+      if (landmarks1.isEmpty || landmarks2.isEmpty) {
+        _logger.warning('No landmarks detected in one or both faces');
+        return false;
+      }
+
+      // Simple comparison of face width and height
+      final width1 = face1.boundingBox.width;
+      final height1 = face1.boundingBox.height;
+      final width2 = face2.boundingBox.width;
+      final height2 = face2.boundingBox.height;
+
+      final widthRatio = width1 / width2;
+      final heightRatio = height1 / height2;
+
+      // Allow for some variation in size
+      if (widthRatio < 0.8 || widthRatio > 1.2 || 
+          heightRatio < 0.8 || heightRatio > 1.2) {
+        _logger.warning('Faces have significantly different sizes');
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      _logger.severe('Error comparing faces', e);
       return false;
     }
   }
@@ -98,5 +159,9 @@ class FaceRecognitionService {
       print('Error downloading face image: $e');
       return null;
     }
+  }
+
+  void dispose() {
+    _faceDetector.close();
   }
 } 

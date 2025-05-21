@@ -1,48 +1,143 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:tp/providers/auth_provider.dart';
+import 'package:camera/camera.dart';
+import 'package:logging/logging.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 class FaceLoginScreen extends StatefulWidget {
-  const FaceLoginScreen({super.key});
+  final String email;
+
+  const FaceLoginScreen({
+    super.key,
+    required this.email,
+  });
 
   @override
   State<FaceLoginScreen> createState() => _FaceLoginScreenState();
 }
 
 class _FaceLoginScreenState extends State<FaceLoginScreen> {
-  File? _image;
-  final ImagePicker _picker = ImagePicker();
+  CameraController? _controller;
   bool _isLoading = false;
+  bool _isCameraInitialized = false;
+  bool _hasError = false;
+  String? _errorMessage;
+  final _logger = Logger('FaceLoginScreen');
+  final _audioPlayer = AudioPlayer();
+  bool _isCapturing = false;
 
-  Future<void> _takePicture() async {
+  @override
+  void initState() {
+    super.initState();
+    _initializeCamera();
+  }
+
+  Future<void> _initializeCamera() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _hasError = false;
+      _errorMessage = null;
+    });
+
     try {
-      final XFile? photo = await _picker.pickImage(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.front,
+      final cameras = await availableCameras();
+      _logger.info('Available cameras: ${cameras.length}');
+      
+      if (cameras.isEmpty) {
+        throw Exception('No cameras available');
+      }
+
+      final frontCamera = cameras.firstWhere(
+        (camera) => camera.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+      
+      _logger.info('Using camera: ${frontCamera.name}');
+
+      final controller = CameraController(
+        frontCamera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
       );
 
-      if (photo != null) {
-        setState(() {
-          _image = File(photo.path);
-        });
-        _verifyFace();
+      await controller.initialize();
+      
+      if (!mounted) {
+        controller.dispose();
+        return;
       }
+
+      setState(() {
+        _controller = controller;
+        _isCameraInitialized = true;
+        _isLoading = false;
+      });
     } catch (e) {
-      print('Error taking picture: $e');
+      _logger.severe('Error initializing camera', e);
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _errorMessage = 'Error initializing camera: $e';
+          _isLoading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error initializing camera: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _playSound(bool success) async {
+    try {
+      final soundFile = success ? 'sounds/success.mp3' : 'sounds/error.mp3';
+      _logger.info('Attempting to play sound: $soundFile');
+      
+      try {
+        if (success) {
+          await _audioPlayer.play(AssetSource('sounds/success.mp3'));
+        } else {
+          await _audioPlayer.play(AssetSource('sounds/error.mp3'));
+        }
+        _logger.info('Sound played successfully');
+      } catch (e) {
+        _logger.warning('Failed to play sound: $e');
+        // Continue execution even if sound fails
+      }
+    } catch (e, stackTrace) {
+      _logger.warning('Error playing sound: $e', e, stackTrace);
+      // Don't rethrow the error as sound is not critical
     }
   }
 
   Future<void> _verifyFace() async {
-    if (_image == null) return;
+    if (_isCapturing) return;
 
     setState(() {
       _isLoading = true;
+      _isCapturing = true;
     });
 
     try {
-      final success = await context.read<AuthProvider>().signInWithFace(_image!);
+      if (_controller == null || !_controller!.value.isInitialized) {
+        throw Exception('Camera not initialized');
+      }
+
+      final image = await _controller!.takePicture();
+      final imageFile = File(image.path);
+
+      if (!mounted) return;
+
+      final success = await context.read<AuthProvider>().signInWithFace(
+        imageFile,
+        widget.email,
+      );
+      
+      await _playSound(success);
 
       if (!mounted) return;
 
@@ -50,69 +145,85 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         Navigator.of(context).pushReplacementNamed('/home');
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Reconnaissance faciale échouée')),
+          const SnackBar(
+            content: Text('Échec de la reconnaissance faciale'),
+            backgroundColor: Colors.red,
+          ),
         );
-        setState(() {
-          _image = null;
-        });
       }
+    } catch (e) {
+      _logger.severe('Error during face verification', e);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() {
           _isLoading = false;
+          _isCapturing = false;
         });
       }
     }
   }
 
   @override
+  void dispose() {
+    _controller?.dispose();
+    _audioPlayer.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Connexion Faciale'),
+        title: const Text('Reconnaissance Faciale'),
       ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (_image != null)
-              Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.blue),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: Image.file(_image!, fit: BoxFit.cover),
+            if (_isLoading)
+              const Column(
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Initialisation de la caméra...'),
+                ],
+              )
+            else if (_hasError)
+              Column(
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                  const SizedBox(height: 16),
+                  Text(_errorMessage ?? 'Unknown error'),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _initializeCamera,
+                    child: const Text('Réessayer'),
+                  ),
+                ],
+              )
+            else if (_controller != null && _controller!.value.isInitialized)
+              Expanded(
+                child: AspectRatio(
+                  aspectRatio: _controller!.value.aspectRatio,
+                  child: CameraPreview(_controller!),
                 ),
               )
             else
-              Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.face, size: 50),
-              ),
+              const Text('Erreur: Caméra non initialisée'),
             const SizedBox(height: 20),
-            if (_isLoading)
-              const CircularProgressIndicator()
-            else
-              ElevatedButton.icon(
-                onPressed: _takePicture,
-                icon: const Icon(Icons.camera_alt),
-                label: const Text('Prendre une photo'),
-              ),
-            const SizedBox(height: 20),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: const Text('Retour à la connexion'),
+            ElevatedButton.icon(
+              onPressed: _isLoading || _hasError ? null : _verifyFace,
+              icon: const Icon(Icons.camera_alt),
+              label: _isLoading
+                  ? const CircularProgressIndicator()
+                  : const Text('Vérifier le visage'),
             ),
           ],
         ),

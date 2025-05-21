@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tp/providers/auth_provider.dart';
 import 'package:tp/screens/face_login_screen.dart';
-import 'package:tp/screens/face_capture_screen.dart';
+import 'package:tp/screens/register_screen.dart';
+import 'package:logging/logging.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -15,19 +16,17 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _usernameController = TextEditingController();
   bool _isLoading = false;
-  bool _isSignUp = false;
+  final _logger = Logger('LoginScreen');
 
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
-    _usernameController.dispose();
     super.dispose();
   }
 
-  Future<void> _submit() async {
+  Future<void> _signIn() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() {
@@ -35,34 +34,32 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      if (_isSignUp) {
-        // Navigate to face capture screen for registration
-        if (!mounted) return;
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => FaceCaptureScreen(
-              email: _emailController.text,
-              password: _passwordController.text,
-              username: _usernameController.text,
-            ),
+      final success = await context.read<AuthProvider>().signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+
+      if (!mounted) return;
+
+      if (success) {
+        Navigator.of(context).pushReplacementNamed('/home');
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Email ou mot de passe incorrect'),
+            backgroundColor: Colors.red,
           ),
         );
-      } else {
-        final success = await context.read<AuthProvider>().signInWithEmailAndPassword(
-          _emailController.text,
-          _passwordController.text,
-        );
-
-        if (!mounted) return;
-
-        if (success) {
-          Navigator.of(context).pushReplacementNamed('/home');
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Échec de la connexion')),
-          );
-        }
       }
+    } catch (e) {
+      _logger.severe('Error during sign in', e);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erreur: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -72,11 +69,31 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  void _navigateToFaceLogin() {
+    if (_emailController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Veuillez entrer votre email'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => FaceLoginScreen(
+          email: _emailController.text.trim(),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isSignUp ? 'Inscription' : 'Connexion'),
+        title: const Text('Connexion'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -85,21 +102,6 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              if (_isSignUp)
-                TextFormField(
-                  controller: _usernameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Nom d\'utilisateur',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Veuillez entrer un nom d\'utilisateur';
-                    }
-                    return null;
-                  },
-                ),
-              if (_isSignUp) const SizedBox(height: 16),
               TextFormField(
                 controller: _emailController,
                 decoration: const InputDecoration(
@@ -110,6 +112,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 validator: (value) {
                   if (value == null || value.isEmpty) {
                     return 'Veuillez entrer votre email';
+                  }
+                  if (!value.contains('@')) {
+                    return 'Veuillez entrer un email valide';
                   }
                   return null;
                 },
@@ -130,43 +135,34 @@ class _LoginScreenState extends State<LoginScreen> {
                 },
               ),
               const SizedBox(height: 24),
-              if (_isLoading)
-                const CircularProgressIndicator()
-              else
-                Column(
-                  children: [
-                    ElevatedButton(
-                      onPressed: _submit,
-                      child: Text(_isSignUp ? 'S\'inscrire' : 'Se connecter'),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _isLoading ? null : _signIn,
+                    icon: const Icon(Icons.login),
+                    label: _isLoading
+                        ? const CircularProgressIndicator()
+                        : const Text('Connexion'),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: _isLoading ? null : _navigateToFaceLogin,
+                    icon: const Icon(Icons.face),
+                    label: const Text('Connexion Faciale'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const RegisterScreen(),
                     ),
-                    const SizedBox(height: 16),
-                    if (!_isSignUp)
-                      ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => const FaceLoginScreen(),
-                            ),
-                          );
-                        },
-                        icon: const Icon(Icons.face),
-                        label: const Text('Connexion Faciale'),
-                      ),
-                    const SizedBox(height: 16),
-                    TextButton(
-                      onPressed: () {
-                        setState(() {
-                          _isSignUp = !_isSignUp;
-                        });
-                      },
-                      child: Text(
-                        _isSignUp
-                            ? 'Déjà un compte ? Se connecter'
-                            : 'Pas de compte ? S\'inscrire',
-                      ),
-                    ),
-                  ],
-                ),
+                  );
+                },
+                child: const Text('Pas encore de compte ? S\'inscrire'),
+              ),
             ],
           ),
         ),
