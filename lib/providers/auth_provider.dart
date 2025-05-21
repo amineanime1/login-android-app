@@ -119,6 +119,17 @@ class AuthProvider extends ChangeNotifier {
         return false;
       }
 
+      // Store face data in user_faces table
+      final faceData = {
+        'user_id': response.user!.id,
+        'email': email,
+        'face_image_url': imageUrl,
+        'created_at': DateTime.now().toIso8601String(),
+        'face_auth_token': response.user!.id, // Use user ID as face auth token
+      };
+
+      await _supabaseService.from('user_faces').insert(faceData);
+
       _logger.info('Sign up completed successfully');
       return true;
     } catch (e) {
@@ -158,11 +169,11 @@ class AuthProvider extends ChangeNotifier {
       final similarity = await _compareImages(image, storedFaceBytes);
       _logger.info('Face similarity: $similarity');
 
-      if (similarity >= 0.8) {
-        // Sign in the user
+      if (similarity >= 0.7) {
+        // Sign in the user with their face auth token
         final authResponse = await _supabaseService.signIn(
           email: email,
-          password: 'face_auth', // This is a placeholder, you might want to handle this differently
+          password: response['face_auth_token'], // Use the stored face auth token
         );
         
         if (authResponse.user != null) {

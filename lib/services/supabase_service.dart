@@ -81,9 +81,16 @@ class SupabaseService {
 
   Future<Uint8List?> downloadFaceImage(String imageUrl) async {
     try {
+      // Extract the file path from the URL
+      final uri = Uri.parse(imageUrl);
+      final pathSegments = uri.pathSegments;
+      final filePath = pathSegments.sublist(pathSegments.indexOf('faces') + 1).join('/');
+      
+      _logger.info('Downloading face image from path: $filePath');
+      
       final response = await _supabase.storage
-          .from('faces')
-          .download(imageUrl);
+          .from(_bucketName)
+          .download(filePath);
 
       return response;
     } catch (e) {
