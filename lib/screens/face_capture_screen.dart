@@ -1,13 +1,10 @@
 import 'dart:io';
-import 'dart:html' as html;
 import 'dart:typed_data';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tp/providers/auth_provider.dart';
 import 'package:camera/camera.dart';
 import 'package:logging/logging.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -33,10 +30,9 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
   CameraController? _controller;
   bool _isLoading = false;
   bool _isCameraInitialized = false;
+  bool _hasError = false;
+  String? _errorMessage;
   final _logger = Logger('FaceCaptureScreen');
-  html.VideoElement? _videoElement;
-  html.CanvasElement? _canvasElement;
-  final _videoContainerKey = GlobalKey();
   final _audioPlayer = AudioPlayer();
   bool _isCapturing = false;
   final _picker = ImagePicker();
@@ -46,10 +42,67 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
   void initState() {
     super.initState();
     if (widget.isLogin) {
-      if (kIsWeb) {
-        _initializeWebCamera();
-      } else {
+      // Delay camera initialization to ensure widget is properly mounted
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         _initializeCamera();
+      });
+    }
+  }
+
+  Future<void> _initializeCamera() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _hasError = false;
+      _errorMessage = null;
+    });
+
+    try {
+      final cameras = await availableCameras();
+      _logger.info('Available cameras: ${cameras.length}');
+      
+      if (cameras.isEmpty) {
+        throw Exception('No cameras available');
+      }
+
+      final frontCamera = cameras.firstWhere(
+        (camera) => camera.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+      
+      _logger.info('Using camera: ${frontCamera.name}');
+
+      final controller = CameraController(
+        frontCamera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+
+      await controller.initialize();
+      
+      if (!mounted) {
+        controller.dispose();
+        return;
+      }
+
+      setState(() {
+        _controller = controller;
+        _isCameraInitialized = true;
+        _isLoading = false;
+      });
+    } catch (e) {
+      _logger.severe('Error initializing camera', e);
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _errorMessage = 'Error initializing camera: $e';
+          _isLoading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error initializing camera: $e')),
+        );
       }
     }
   }
@@ -61,7 +114,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
         imageQuality: 100,
       );
 
-      if (image != null) {
+      if (image != null && mounted) {
         setState(() {
           _selectedImage = File(image.path);
         });
@@ -78,131 +131,23 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
 
   Future<void> _playSound(bool success) async {
     try {
-      if (success) {
-        await _audioPlayer.play(AssetSource('sounds/success.mp3'));
-      } else {
-        await _audioPlayer.play(AssetSource('sounds/error.mp3'));
-      }
-    } catch (e) {
-      _logger.warning('Error playing sound: $e');
-    }
-  }
-
-  Future<void> _initializeWebCamera() async {
-    try {
-      final stream = await html.window.navigator.mediaDevices?.getUserMedia({
-        'video': {
-          'facingMode': 'user',
-          'width': {'ideal': 1280},
-          'height': {'ideal': 720}
+      final soundFile = success ? 'sounds/success.mp3' : 'sounds/error.mp3';
+      _logger.info('Attempting to play sound: $soundFile');
+      
+      try {
+        if (success) {
+          await _audioPlayer.play(AssetSource('sounds/success.mp3'));
+        } else {
+          await _audioPlayer.play(AssetSource('sounds/error.mp3'));
         }
-      });
-
-      if (stream != null) {
-        _videoElement = html.VideoElement()
-          ..srcObject = stream
-          ..autoplay = true
-          ..setAttribute('playsinline', 'true')
-          ..style.width = '100%'
-          ..style.height = '100%'
-          ..style.objectFit = 'cover';
-
-        _canvasElement = html.CanvasElement()
-          ..width = 1280
-          ..height = 720;
-
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_videoContainerKey.currentContext != null) {
-            final container = _videoContainerKey.currentContext!.findRenderObject() as html.HtmlElement;
-            container.append(_videoElement!);
-          }
-        });
-
-        if (mounted) {
-          setState(() {
-            _isCameraInitialized = true;
-          });
-        }
+        _logger.info('Sound played successfully');
+      } catch (e) {
+        _logger.warning('Failed to play sound: $e');
+        // Continue execution even if sound fails
       }
-    } catch (e) {
-      _logger.severe('Error initializing web camera', e);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error initializing camera: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _initializeCamera() async {
-    try {
-      final cameras = await availableCameras();
-      _logger.info('Available cameras: ${cameras.length}');
-      
-      if (cameras.isEmpty) {
-        _logger.severe('No cameras available');
-        return;
-      }
-
-      final frontCamera = cameras.firstWhere(
-        (camera) => camera.lensDirection == CameraLensDirection.front,
-        orElse: () => cameras.first,
-      );
-      
-      _logger.info('Using camera: ${frontCamera.name}');
-
-      _controller = CameraController(
-        frontCamera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-
-      await _controller!.initialize();
-      _logger.info('Camera initialized successfully');
-      
-      if (mounted) {
-        setState(() {
-          _isCameraInitialized = true;
-        });
-      }
-    } catch (e) {
-      _logger.severe('Error initializing camera', e);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error initializing camera: $e')),
-        );
-      }
-    }
-  }
-
-  Future<Uint8List?> _captureWebImage() async {
-    if (_videoElement == null || _canvasElement == null) {
-      _logger.warning('Video or canvas element is null');
-      return null;
-    }
-
-    try {
-      final context = _canvasElement!.context2D;
-      context.drawImage(_videoElement!, 0, 0);
-
-      final blob = await _canvasElement!.toBlob();
-      if (blob == null) {
-        _logger.warning('Failed to create blob from canvas');
-        return null;
-      }
-
-      final reader = html.FileReader();
-      reader.readAsArrayBuffer(blob);
-      await reader.onLoad.first;
-
-      final bytes = Uint8List.view(reader.result as ByteBuffer);
-      
-      _logger.info('Image captured successfully');
-      return bytes;
-    } catch (e) {
-      _logger.severe('Error capturing web image', e);
-      return null;
+    } catch (e, stackTrace) {
+      _logger.warning('Error playing sound: $e', e, stackTrace);
+      // Don't rethrow the error as sound is not critical
     }
   }
 
@@ -216,34 +161,16 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
 
     try {
       if (widget.isLogin) {
-        // Mode connexion : utiliser la caméra
-        dynamic imageData;
-        
-        if (kIsWeb) {
-          imageData = await _captureWebImage();
-          if (imageData == null) {
-            throw Exception('Failed to capture image from web camera');
-          }
-        } else {
-          if (_controller == null || !_controller!.value.isInitialized) {
-            _logger.warning('Camera not initialized, cannot capture image');
-            return;
-          }
-          final image = await _controller!.takePicture();
-          imageData = File(image.path);
+        if (_controller == null || !_controller!.value.isInitialized) {
+          throw Exception('Camera not initialized');
         }
+
+        final image = await _controller!.takePicture();
+        final imageFile = File(image.path);
 
         if (!mounted) return;
 
-        bool success;
-        if (kIsWeb) {
-          final tempFile = File('temp_image.jpg');
-          await tempFile.writeAsBytes(imageData as Uint8List);
-          success = await context.read<AuthProvider>().signInWithFace(tempFile);
-        } else {
-          success = await context.read<AuthProvider>().signInWithFace(imageData as File);
-        }
-
+        final success = await context.read<AuthProvider>().signInWithFace(imageFile);
         await _playSound(success);
 
         if (!mounted) return;
@@ -256,38 +183,77 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
           );
         }
       } else {
-        // Mode inscription : utiliser l'image sélectionnée
+        _logger.info('Starting registration process');
+        _logger.info('Email: ${widget.email}');
+        _logger.info('Username: ${widget.username}');
+        
         if (_selectedImage == null) {
+          _logger.warning('No image selected for registration');
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Veuillez sélectionner une photo')),
           );
           return;
         }
 
-        final success = await context.read<AuthProvider>().signUpWithEmailAndPassword(
-          email: widget.email,
-          password: widget.password,
-          username: widget.username,
-          faceImage: _selectedImage!,
-        );
+        _logger.info('Selected image path: ${_selectedImage!.path}');
+        _logger.info('Image exists: ${await _selectedImage!.exists()}');
+        _logger.info('Image size: ${await _selectedImage!.length()} bytes');
 
-        await _playSound(success);
-
-        if (!mounted) return;
-
-        if (success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Inscription réussie !')),
+        try {
+          _logger.info('Attempting to sign up with email and password');
+          final success = await context.read<AuthProvider>().signUpWithEmailAndPassword(
+            email: widget.email,
+            password: widget.password,
+            username: widget.username,
+            faceImage: _selectedImage!,
           );
-          Navigator.of(context).pushReplacementNamed('/home');
-        } else {
+
+          _logger.info('Sign up result: $success');
+
+          try {
+            await _playSound(success);
+          } catch (e) {
+            _logger.warning('Failed to play sound: $e');
+            // Continue execution even if sound fails
+          }
+
+          if (!mounted) return;
+
+          if (success) {
+            _logger.info('Registration successful, navigating to home');
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Inscription réussie !')),
+            );
+            Navigator.of(context).pushReplacementNamed('/home');
+          } else {
+            _logger.severe('Registration failed without specific error');
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Erreur lors de l\'inscription. Veuillez réessayer.')),
+            );
+          }
+        } catch (e) {
+          _logger.severe('Error during registration process', e);
+          if (!mounted) return;
+          
+          String errorMessage = 'Erreur lors de l\'inscription';
+          if (e.toString().contains('over_email_send_rate_limit')) {
+            errorMessage = 'Veuillez attendre quelques instants avant de réessayer.';
+          } else if (e.toString().contains('Bucket not found') || 
+                    e.toString().contains('Storage access error')) {
+            errorMessage = 'Erreur de configuration. Veuillez contacter le support.';
+          }
+          
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Erreur lors de l\'inscription')),
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ),
           );
         }
       }
-    } catch (e) {
-      _logger.severe('Error during submission', e);
+    } catch (e, stackTrace) {
+      _logger.severe('Error during submission', e, stackTrace);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e')),
@@ -305,8 +271,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
   @override
   void dispose() {
     _controller?.dispose();
-    _videoElement?.srcObject?.getTracks().forEach((track) => track.stop());
-    _videoElement?.remove();
     _audioPlayer.dispose();
     super.dispose();
   }
@@ -322,22 +286,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             if (widget.isLogin) ...[
-              if (kIsWeb && _isCameraInitialized)
-                Expanded(
-                  child: Container(
-                    key: _videoContainerKey,
-                    width: double.infinity,
-                    height: double.infinity,
-                    color: Colors.black,
-                    child: const Center(
-                      child: Text(
-                        'Initialisation de la caméra...',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
-                  ),
-                )
-              else if (!kIsWeb && !_isCameraInitialized)
+              if (_isLoading)
                 const Column(
                   children: [
                     CircularProgressIndicator(),
@@ -345,7 +294,20 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
                     Text('Initialisation de la caméra...'),
                   ],
                 )
-              else if (!kIsWeb && _controller != null && _controller!.value.isInitialized)
+              else if (_hasError)
+                Column(
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                    const SizedBox(height: 16),
+                    Text(_errorMessage ?? 'Unknown error'),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: _initializeCamera,
+                      child: const Text('Réessayer'),
+                    ),
+                  ],
+                )
+              else if (_controller != null && _controller!.value.isInitialized)
                 Expanded(
                   child: AspectRatio(
                     aspectRatio: _controller!.value.aspectRatio,
@@ -386,7 +348,7 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
             const SizedBox(height: 20),
             if (widget.isLogin)
               ElevatedButton.icon(
-                onPressed: _isLoading ? null : _submit,
+                onPressed: _isLoading || _hasError ? null : _submit,
                 icon: const Icon(Icons.camera_alt),
                 label: _isLoading
                     ? const CircularProgressIndicator()
