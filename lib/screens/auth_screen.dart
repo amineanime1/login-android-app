@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tp/providers/auth_provider.dart';
+import 'package:tp/screens/face_capture_screen.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -29,19 +30,43 @@ class _AuthScreenState extends State<AuthScreen> {
 
     try {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      bool success;
+      
       if (_isLogin) {
-        await authProvider.signIn(_email, _password);
+        success = await authProvider.signInWithEmailAndPassword(_email, _password);
+        if (!mounted) return;
+
+        if (success) {
+          Navigator.of(context).pushReplacementNamed('/home');
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Authentication failed')),
+          );
+        }
       } else {
-        await authProvider.signUp(_email, _password, _firstName, _lastName);
+        // Pour l'inscription, nous naviguons vers l'écran de capture de photo
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => FaceCaptureScreen(
+              email: _email,
+              password: _password,
+              username: '$_firstName $_lastName',
+            ),
+          ),
+        );
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.toString())),
       );
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 

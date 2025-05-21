@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tp/providers/auth_provider.dart';
-import 'package:tp/screens/signup_screen.dart';
+import 'package:tp/screens/face_login_screen.dart';
+import 'package:tp/screens/face_capture_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -12,26 +13,56 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  String _email = '';
-  String _password = '';
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _usernameController = TextEditingController();
   bool _isLoading = false;
+  bool _isSignUp = false;
 
-  void _submit() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
-    _formKey.currentState!.save();
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    _usernameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+
     setState(() {
       _isLoading = true;
     });
 
     try {
-      await Provider.of<AuthProvider>(context, listen: false)
-          .signIn(_email, _password);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
+      if (_isSignUp) {
+        // Navigate to face capture screen for registration
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => FaceCaptureScreen(
+              email: _emailController.text,
+              password: _passwordController.text,
+              username: _usernameController.text,
+            ),
+          ),
+        );
+      } else {
+        final success = await context.read<AuthProvider>().signInWithEmailAndPassword(
+          _emailController.text,
+          _passwordController.text,
+        );
+
+        if (!mounted) return;
+
+        if (success) {
+          Navigator.of(context).pushReplacementNamed('/home');
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Échec de la connexion')),
+          );
+        }
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -45,59 +76,98 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Login'),
+        title: Text(_isSignUp ? 'Inscription' : 'Connexion'),
       ),
-      body: Center(
-        child: Card(
-          margin: const EdgeInsets.all(20),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextFormField(
-                    decoration: const InputDecoration(labelText: 'Email'),
-                    keyboardType: TextInputType.emailAddress,
-                    validator: (value) {
-                      if (value == null || value.isEmpty || !value.contains('@')) {
-                        return 'Please enter a valid email';
-                      }
-                      return null;
-                    },
-                    onSaved: (value) => _email = value!,
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_isSignUp)
+                TextFormField(
+                  controller: _usernameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Nom d\'utilisateur',
+                    border: OutlineInputBorder(),
                   ),
-                  TextFormField(
-                    decoration: const InputDecoration(labelText: 'Password'),
-                    obscureText: true,
-                    validator: (value) {
-                      if (value == null || value.isEmpty || value.length < 6) {
-                        return 'Password must be at least 6 characters long';
-                      }
-                      return null;
-                    },
-                    onSaved: (value) => _password = value!,
-                  ),
-                  const SizedBox(height: 20),
-                  if (_isLoading)
-                    const CircularProgressIndicator()
-                  else
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Veuillez entrer un nom d\'utilisateur';
+                    }
+                    return null;
+                  },
+                ),
+              if (_isSignUp) const SizedBox(height: 16),
+              TextFormField(
+                controller: _emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Email',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.emailAddress,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Veuillez entrer votre email';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _passwordController,
+                decoration: const InputDecoration(
+                  labelText: 'Mot de passe',
+                  border: OutlineInputBorder(),
+                ),
+                obscureText: true,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Veuillez entrer votre mot de passe';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 24),
+              if (_isLoading)
+                const CircularProgressIndicator()
+              else
+                Column(
+                  children: [
                     ElevatedButton(
                       onPressed: _submit,
-                      child: const Text('Login'),
+                      child: Text(_isSignUp ? 'S\'inscrire' : 'Se connecter'),
                     ),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.of(context).push(MaterialPageRoute(
-                        builder: (context) => const SignupScreen(),
-                      ));
-                    },
-                    child: const Text('Create new account'),
-                  ),
-                ],
-              ),
-            ),
+                    const SizedBox(height: 16),
+                    if (!_isSignUp)
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => const FaceLoginScreen(),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.face),
+                        label: const Text('Connexion Faciale'),
+                      ),
+                    const SizedBox(height: 16),
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _isSignUp = !_isSignUp;
+                        });
+                      },
+                      child: Text(
+                        _isSignUp
+                            ? 'Déjà un compte ? Se connecter'
+                            : 'Pas de compte ? S\'inscrire',
+                      ),
+                    ),
+                  ],
+                ),
+            ],
           ),
         ),
       ),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tp/providers/auth_provider.dart';
+import 'package:tp/screens/face_capture_screen.dart';
+import 'dart:io';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -27,9 +29,19 @@ class _SignupScreenState extends State<SignupScreen> {
     });
 
     try {
-      await Provider.of<AuthProvider>(context, listen: false)
-          .signUp(_email, _password, _firstName, _lastName);
+      // Navigate to face capture screen for registration
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => FaceCaptureScreen(
+            email: _email,
+            password: _password,
+            username: '$_firstName $_lastName',
+          ),
+        ),
+      );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.toString())),
       );
