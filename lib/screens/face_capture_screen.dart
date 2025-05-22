@@ -6,6 +6,7 @@ import 'package:camera/camera.dart';
 import 'package:logging/logging.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:tp/services/face_recognition_service.dart';
 
 class FaceCaptureScreen extends StatefulWidget {
   final String email;
@@ -73,12 +74,16 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
 
       final controller = CameraController(
         frontCamera,
-        ResolutionPreset.medium,
+        ResolutionPreset.max,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        imageFormatGroup: ImageFormatGroup.yuv420,
       );
 
       await controller.initialize();
+      
+      await controller.setFocusMode(FocusMode.auto);
+      await controller.setExposureMode(ExposureMode.auto);
+      await controller.setFlashMode(FlashMode.auto);
       
       if (!mounted) {
         controller.dispose();
@@ -167,31 +172,85 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
 
         if (!mounted) return;
 
-        final success = await context.read<AuthProvider>().signInWithFace(
-          imageFile,
-          widget.email,
-        );
-        await _playSound(success);
-
-        if (!mounted) return;
-
-        if (success) {
+        // Vérifier si un visage est détecté
+        final faces = await context.read<FaceRecognitionService>().detectFaces(imageFile);
+        if (faces.isEmpty) {
           if (!mounted) return;
-          try {
-            await Navigator.of(context).pushReplacementNamed('/home');
-          } catch (e) {
-            _logger.severe('Navigation error', e);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Aucun visage détecté. Veuillez vous positionner correctement.'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3),
+            ),
+          );
+          return;
+        }
+
+        // Vérifier la qualité du visage
+        final face = faces.first;
+        if (face.headEulerAngleY != null && face.headEulerAngleY!.abs() > 20) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Veuillez garder la tête droite (rotation < 20°)'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3),
+            ),
+          );
+          return;
+        }
+
+        try {
+          final success = await context.read<AuthProvider>().signInWithFace(
+            imageFile,
+            widget.email,
+          );
+          await _playSound(success);
+
+          if (!mounted) return;
+
+          if (success) {
             if (!mounted) return;
+            try {
+              await Navigator.of(context).pushReplacementNamed('/home');
+            } catch (e) {
+              _logger.severe('Navigation error', e);
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Erreur de navigation. Veuillez réessayer.'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+          } else {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Erreur de navigation. Veuillez réessayer.'),
+                content: Text('Les visages ne correspondent pas. Veuillez réessayer.'),
                 backgroundColor: Colors.red,
+                duration: Duration(seconds: 3),
               ),
             );
           }
-        } else {
+        } catch (e) {
+          _logger.severe('Error during face authentication', e);
+          if (!mounted) return;
+
+          String errorMessage = 'Erreur lors de l\'authentification';
+          if (e.toString().contains('PGRST116') || e.toString().contains('no rows returned')) {
+            errorMessage = 'Aucun compte trouvé avec cet email. Veuillez vous inscrire d\'abord.';
+          } else if (e.toString().contains('invalid_credentials')) {
+            errorMessage = 'Email ou mot de passe incorrect.';
+          } else if (e.toString().contains('network')) {
+            errorMessage = 'Erreur de connexion. Vérifiez votre connexion internet.';
+          }
+
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Échec de la reconnaissance faciale')),
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ),
           );
         }
       } else {
@@ -202,7 +261,38 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
         if (_selectedImage == null) {
           _logger.warning('No image selected for registration');
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Veuillez sélectionner une photo')),
+            const SnackBar(
+              content: Text('Veuillez sélectionner une photo'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          return;
+        }
+
+        // Vérifier si un visage est détecté
+        final faces = await context.read<FaceRecognitionService>().detectFaces(_selectedImage!);
+        if (faces.isEmpty) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Aucun visage détecté dans la photo. Veuillez en sélectionner une autre.'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3),
+            ),
+          );
+          return;
+        }
+
+        // Vérifier la qualité du visage
+        final face = faces.first;
+        if (face.headEulerAngleY != null && face.headEulerAngleY!.abs() > 20) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('La photo doit montrer un visage de face (rotation < 20°)'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3),
+            ),
           );
           return;
         }
@@ -226,7 +316,6 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
             await _playSound(success);
           } catch (e) {
             _logger.warning('Failed to play sound: $e');
-            // Continue execution even if sound fails
           }
 
           if (!mounted) return;
@@ -249,7 +338,10 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
           } else {
             _logger.severe('Registration failed without specific error');
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Erreur lors de l\'inscription. Veuillez réessayer.')),
+              const SnackBar(
+                content: Text('Erreur lors de l\'inscription. Veuillez réessayer.'),
+                backgroundColor: Colors.red,
+              ),
             );
           }
         } catch (e) {
@@ -262,6 +354,10 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
           } else if (e.toString().contains('Bucket not found') || 
                     e.toString().contains('Storage access error')) {
             errorMessage = 'Erreur de configuration. Veuillez contacter le support.';
+          } else if (e.toString().contains('duplicate key value')) {
+            errorMessage = 'Cet email est déjà utilisé.';
+          } else if (e.toString().contains('invalid_credentials')) {
+            errorMessage = 'Email ou mot de passe incorrect.';
           }
           
           ScaffoldMessenger.of(context).showSnackBar(
@@ -277,7 +373,11 @@ class _FaceCaptureScreenState extends State<FaceCaptureScreen> {
       _logger.severe('Error during submission', e, stackTrace);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+        SnackBar(
+          content: Text('Erreur: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ),
       );
     } finally {
       if (mounted) {

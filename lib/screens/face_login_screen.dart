@@ -114,7 +114,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     }
   }
 
-  Future<void> _verifyFace() async {
+  Future<void> _submit() async {
     if (_isCapturing) return;
 
     setState(() {
@@ -136,29 +136,34 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         imageFile,
         widget.email,
       );
-      
       await _playSound(success);
 
       if (!mounted) return;
 
       if (success) {
-        Navigator.of(context).pushReplacementNamed('/home');
+        if (!mounted) return;
+        try {
+          await Navigator.of(context).pushReplacementNamed('/home');
+        } catch (e) {
+          _logger.severe('Navigation error', e);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Erreur de navigation. Veuillez réessayer.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Échec de la reconnaissance faciale'),
-            backgroundColor: Colors.red,
-          ),
+          const SnackBar(content: Text('Échec de la reconnaissance faciale')),
         );
       }
     } catch (e) {
       _logger.severe('Error during face verification', e);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: Colors.red,
-        ),
+        SnackBar(content: Text('Error: $e')),
       );
     } finally {
       if (mounted) {
@@ -219,7 +224,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
               const Text('Erreur: Caméra non initialisée'),
             const SizedBox(height: 20),
             ElevatedButton.icon(
-              onPressed: _isLoading || _hasError ? null : _verifyFace,
+              onPressed: _isLoading || _hasError ? null : _submit,
               icon: const Icon(Icons.camera_alt),
               label: _isLoading
                   ? const CircularProgressIndicator()

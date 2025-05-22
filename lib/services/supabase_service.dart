@@ -55,6 +55,32 @@ class SupabaseService {
     }
   }
 
+  Future<AuthResponse> signInWithFaceToken(String email) async {
+    try {
+      // Appeler l'Edge Function pour obtenir le token JWT
+      final response = await _supabase.functions.invoke(
+        'face-auth',
+        body: {'email': email},
+      );
+
+      if (response.status != 200) {
+        throw Exception('Failed to get face auth token');
+      }
+
+      final data = response.data as Map<String, dynamic>;
+      final token = data['token'] as String;
+
+      // Se connecter avec le token JWT
+      return await _supabase.auth.signInWithIdToken(
+        provider: OAuthProvider.google,
+        idToken: token,
+      );
+    } catch (e) {
+      _logger.severe('Error during face token authentication', e);
+      rethrow;
+    }
+  }
+
   // Stockage des photos
   Future<String?> uploadFaceImage(File image, String userId) async {
     try {

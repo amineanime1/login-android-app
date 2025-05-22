@@ -7,6 +7,8 @@ import 'package:tp/services/supabase_service.dart';
 import 'package:logging/logging.dart';
 import 'package:image/image.dart' as img;
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 
 class AuthProvider extends ChangeNotifier {
   final SupabaseService _supabaseService;
@@ -97,6 +99,8 @@ class AuthProvider extends ChangeNotifier {
   }) async {
     try {
       _logger.info('Starting sign up process');
+      
+      // Create user with their chosen password
       final response = await _supabaseService.signUp(
         email: email,
         password: password,
@@ -125,7 +129,6 @@ class AuthProvider extends ChangeNotifier {
         'email': email,
         'face_image_url': imageUrl,
         'created_at': DateTime.now().toIso8601String(),
-        'face_auth_token': response.user!.id, // Use user ID as face auth token
       };
 
       await _supabaseService.from('user_faces').insert(faceData);
@@ -141,23 +144,26 @@ class AuthProvider extends ChangeNotifier {
   Future<bool> signInWithFace(File image, String email) async {
     try {
       _logger.info('Starting face authentication for email: $email');
+      _isLoading = true;
+      _error = null;
+      notifyListeners();
       
-      // Get the stored face image for this email
-      final response = await _supabaseService
+      // Get face data from user_faces table
+      final faceData = await _supabaseService
           .from('user_faces')
           .select()
           .eq('email', email)
           .single();
       
-      if (response == null) {
+      if (faceData == null) {
         _logger.warning('No face data found for email: $email');
         return false;
       }
 
-      final storedFaceUrl = response['face_image_url'] as String;
+      final storedFaceUrl = faceData['face_image_url'] as String;
       _logger.info('Found stored face URL: $storedFaceUrl');
 
-      // Download the stored face image
+      // Download stored face image
       final storedFaceBytes = await _supabaseService.downloadFaceImage(storedFaceUrl);
       
       if (storedFaceBytes == null) {
@@ -165,72 +171,55 @@ class AuthProvider extends ChangeNotifier {
         return false;
       }
 
-      // Compare the images
-      final similarity = await _compareImages(image, storedFaceBytes);
-      _logger.info('Face similarity: $similarity');
+      // Create temporary file for stored face
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/temp_face.jpg');
+      await tempFile.writeAsBytes(storedFaceBytes);
 
-      if (similarity >= 0.7) {
-        // Sign in the user with their face auth token
-        final authResponse = await _supabaseService.signIn(
-          email: email,
-          password: response['face_auth_token'], // Use the stored face auth token
-        );
-        
-        if (authResponse.user != null) {
-          _user = authResponse.user;
-          notifyListeners();
+      // Compare faces
+      final facesMatch = await _faceService.compareFaces(image, tempFile);
+      _logger.info('Face similarity: ${facesMatch ? 1.0 : 0.0}');
+
+      // Clean up temporary file
+      await tempFile.delete();
+
+      if (facesMatch) {
+        try {
+          // Use JWT authentication
+          await _supabaseService.signInWithFaceToken(email);
+          _logger.info('Face authentication successful');
           return true;
+        } catch (e) {
+          _logger.severe('Error during face authentication', e);
+          return false;
         }
       }
 
       return false;
     } catch (e) {
+      _error = e.toString();
       _logger.severe('Error during face authentication', e);
-      rethrow;
+      return false;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
   Future<double> _compareImages(File image1, Uint8List image2Bytes) async {
     try {
-      // Read the images
-      final bytes1 = await image1.readAsBytes();
+      // Create a temporary file for the second image
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/temp_face.jpg');
+      await tempFile.writeAsBytes(image2Bytes);
+
+      // Use the face recognition service to compare faces
+      final isMatch = await _faceService.compareFaces(image1, tempFile);
       
-      final img1 = img.decodeImage(bytes1);
-      final img2 = img.decodeImage(image2Bytes);
+      // Clean up the temporary file
+      await tempFile.delete();
 
-      if (img1 == null || img2 == null) {
-        throw Exception('Failed to decode images');
-      }
-
-      // Resize images to same dimensions for comparison
-      final resized1 = img.copyResize(img1, width: 100, height: 100);
-      final resized2 = img.copyResize(img2, width: 100, height: 100);
-
-      // Convert to grayscale
-      final gray1 = img.grayscale(resized1);
-      final gray2 = img.grayscale(resized2);
-
-      // Calculate similarity using pixel-by-pixel comparison
-      double totalDiff = 0;
-      int totalPixels = 0;
-
-      for (var y = 0; y < gray1.height; y++) {
-        for (var x = 0; x < gray1.width; x++) {
-          final pixel1 = gray1.getPixel(x, y);
-          final pixel2 = gray2.getPixel(x, y);
-          
-          // Calculate difference in grayscale values
-          final diff = (img.getLuminance(pixel1) - img.getLuminance(pixel2)).abs();
-          totalDiff += diff;
-          totalPixels++;
-        }
-      }
-
-      // Calculate similarity score (0 to 1, where 1 is identical)
-      final avgDiff = totalDiff / totalPixels;
-      final similarity = 1 - (avgDiff / 255);
-      
-      return similarity;
+      return isMatch ? 1.0 : 0.0;
     } catch (e) {
       _logger.severe('Error comparing images', e);
       return 0;

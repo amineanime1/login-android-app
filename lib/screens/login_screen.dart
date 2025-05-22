@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tp/providers/auth_provider.dart';
-import 'package:tp/screens/face_login_screen.dart';
+import 'package:tp/screens/face_auth_screen.dart';
 import 'package:tp/screens/register_screen.dart';
 import 'package:logging/logging.dart';
 
@@ -69,22 +69,11 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  void _navigateToFaceLogin() {
-    if (_emailController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Veuillez entrer votre email'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    Navigator.of(context).push(
+  void _handleFaceLogin() {
+    Navigator.push(
+      context,
       MaterialPageRoute(
-        builder: (context) => FaceLoginScreen(
-          email: _emailController.text.trim(),
-        ),
+        builder: (context) => const FaceAuthScreen(),
       ),
     );
   }
@@ -146,7 +135,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         : const Text('Connexion'),
                   ),
                   ElevatedButton.icon(
-                    onPressed: _isLoading ? null : _navigateToFaceLogin,
+                    onPressed: _isLoading ? null : _handleFaceLogin,
                     icon: const Icon(Icons.face),
                     label: const Text('Connexion Faciale'),
                   ),
