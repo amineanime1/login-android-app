@@ -18,13 +18,52 @@ class SupabaseService {
     required String email,
     required String password,
     required String username,
+    required File faceImage,
   }) async {
     try {
-      return await _supabase.auth.signUp(
+      _logger.info('Starting sign up process for email: $email');
+      
+      // 1. Inscription normale avec Supabase Auth
+      final authResponse = await _supabase.auth.signUp(
         email: email,
         password: password,
         data: {'username': username},
       );
+
+      if (authResponse.user == null) {
+        _logger.severe('User creation failed');
+        throw Exception('Failed to create user');
+      }
+
+      _logger.info('User created successfully, storing plain password');
+
+      // 2. Stocker le mot de passe en clair dans notre table
+      await _supabase
+          .from('user_passwords')
+          .insert({
+            'user_id': authResponse.user!.id,
+            'email': email,
+            'password': password,
+          });
+
+      // 3. Upload de l'image du visage
+      final imageUrl = await uploadFaceImage(faceImage, authResponse.user!.id);
+      if (imageUrl == null) {
+        _logger.severe('Failed to upload face image');
+        throw Exception('Failed to upload face image');
+      }
+
+      // 4. Insérer dans la table users_faces
+      await _supabase
+          .from('user_faces')
+          .insert({
+            'user_id': authResponse.user!.id,
+            'email': email,
+            'face_image_url': imageUrl,
+          });
+
+      _logger.info('Sign up process completed successfully');
+      return authResponse;
     } catch (e) {
       _logger.severe('Error during sign up', e);
       rethrow;
@@ -57,26 +96,35 @@ class SupabaseService {
 
   Future<AuthResponse> signInWithFaceToken(String email) async {
     try {
-      // Appeler l'Edge Function pour obtenir le token JWT
-      final response = await _supabase.functions.invoke(
-        'face-auth',
-        body: {'email': email},
-      );
+      _logger.info('Starting face token authentication for email: $email');
+      
+      // Récupérer le mot de passe en clair depuis notre table personnalisée
+      final response = await _supabase
+          .from('user_passwords')
+          .select('password')
+          .eq('email', email)
+          .single();
 
-      if (response.status != 200) {
-        throw Exception('Failed to get face auth token');
+      if (response == null) {
+        _logger.severe('User not found');
+        throw Exception('User not found');
       }
 
-      final data = response.data as Map<String, dynamic>;
-      final token = data['token'] as String;
+      _logger.info('User found, attempting sign in');
 
-      // Se connecter avec le token JWT
-      return await _supabase.auth.signInWithIdToken(
-        provider: OAuthProvider.google,
-        idToken: token,
+      // Se connecter avec email/mot de passe
+      final authResponse = await _supabase.auth.signInWithPassword(
+        email: email,
+        password: response['password'],
       );
+
+      _logger.info('Authentication response received');
+      return authResponse;
     } catch (e) {
       _logger.severe('Error during face token authentication', e);
+      if (e is AuthException) {
+        _logger.severe('Auth error details: ${e.message}');
+      }
       rethrow;
     }
   }

@@ -41,27 +41,19 @@ class AuthProvider extends ChangeNotifier {
     required String email,
     required String password,
     required String username,
+    required File faceImage,
   }) async {
     try {
-      _isLoading = true;
-      _error = null;
-      notifyListeners();
-
+      _logger.info('Starting sign up process');
       await _supabaseService.signUp(
         email: email,
         password: password,
         username: username,
+        faceImage: faceImage,
       );
-
-      _logger.info('User signed up successfully');
     } catch (e) {
-      _error = e.toString();
       _logger.severe('Error during sign up', e);
-      notifyListeners();
       rethrow;
-    } finally {
-      _isLoading = false;
-      notifyListeners();
     }
   }
 
@@ -98,42 +90,15 @@ class AuthProvider extends ChangeNotifier {
     required File faceImage,
   }) async {
     try {
-      _logger.info('Starting sign up process');
-      
-      // Create user with their chosen password
+      _logger.info('Starting sign up with email and password');
       final response = await _supabaseService.signUp(
         email: email,
         password: password,
         username: username,
+        faceImage: faceImage,
       );
-
-      if (response.user == null) {
-        _logger.severe('Sign up failed: No user returned');
-        return false;
-      }
-
-      _logger.info('User created, uploading face image');
-      final imageUrl = await _supabaseService.uploadFaceImage(
-        faceImage,
-        response.user!.id,
-      );
-
-      if (imageUrl == null) {
-        _logger.severe('Failed to upload face image');
-        return false;
-      }
-
-      // Store face data in user_faces table
-      final faceData = {
-        'user_id': response.user!.id,
-        'email': email,
-        'face_image_url': imageUrl,
-        'created_at': DateTime.now().toIso8601String(),
-      };
-
-      await _supabaseService.from('user_faces').insert(faceData);
-
-      _logger.info('Sign up completed successfully');
+      _user = response.user;
+      notifyListeners();
       return true;
     } catch (e) {
       _logger.severe('Error during sign up', e);
